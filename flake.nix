@@ -30,6 +30,7 @@
     in mkShell {
       buildInputs = [
         build-rust
+        cargo
       ];
     };
   };
