@@ -3,6 +3,7 @@ use ratatui::{
     DefaultTerminal,
 };
 use std::{
+    borrow::BorrowMut,
     fmt,
     ops::{
         Add,
@@ -45,15 +46,17 @@ pub struct App {
 pub struct Level {
     pub player_location: Coord,
     pub level_state: Grid<Cell>,
-    pub move_counter: u16,
+    pub move_counter: usize,
+    pub remaining_boxes: usize,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Coord(u16, u16);
 
 #[derive(Clone, Copy)]
 pub struct Offset(i16, i16);
 
+#[derive(Debug)]
 pub struct Grid<T>(pub Vec<Vec<T>>);
 
 impl<T> Index<Coord> for Grid<T> {
@@ -81,8 +84,25 @@ impl App {
                 Continue(()) => {}
                 Break(b) => return Ok(()),
             };
+            self.update()
         }
         Ok(())
+    }
+
+    fn update(&mut self) {
+        match &self.current_screen {
+            CurrentScreen::Menu(_) => {}
+            CurrentScreen::Game(level) => {
+                if level.remaining_boxes == 0 {
+                    self.next_level()
+                }
+            }
+        }
+    }
+
+    fn next_level(&mut self) {
+        self.current_screen = CurrentScreen::Game(self.select_level(self.next_level));
+        self.next_level += 1;
     }
 
     fn process_input(&mut self, key: KeyEvent) -> ControlFlow<bool> {
@@ -126,7 +146,10 @@ impl App {
             return;
         };
 
-        assert!(level.level_state[level.player_location] == Player);
+        assert!(
+            level.level_state[level.player_location] == Player
+                || level.level_state[level.player_location] == PlayerOnTarget
+        );
 
         use KeyBind::*;
         let dir = Offset(
@@ -144,41 +167,62 @@ impl App {
 
         let next_pos = level.player_location + dir;
         let next_next_pos = level.player_location + dir * 2;
+
+        let grid = level.level_state.borrow_mut();
+
         use Cell::*;
-        match (
-            &level.level_state[next_pos],
-            &level.level_state[next_next_pos],
-        ) {
+        (grid[next_pos], grid[next_next_pos]) = match (&grid[next_pos], &grid[next_next_pos]) {
             (Empty, _) => {
-                level.level_state[level.player_location] = Empty;
-                level.level_state[next_pos] = Player;
+                grid[level.player_location] = match grid[level.player_location] {
+                    Player => Empty,
+                    PlayerOnTarget => Target,
+                    _ => unreachable!(),
+                };
                 level.player_location = next_pos;
+                level.move_counter += 1;
+                (Player, grid[next_next_pos])
             }
-            (Box, Empty) => {
-                level.level_state[next_pos] = Empty;
-                level.level_state[next_next_pos] = Box;
+            (Target, _) => {
+                grid[level.player_location] = Empty;
+                level.player_location = next_pos;
+                level.move_counter += 1;
+                (PlayerOnTarget, grid[next_next_pos])
             }
-            _ => {}
+            (Box, Empty) => (Empty, Box),
+            (Box, Target) => {
+                level.remaining_boxes -= 1;
+                (Empty, LockedBox)
+            }
+            (LockedBox, Empty) => {
+                level.remaining_boxes += 1;
+                (Target, Box)
+            }
+            (other, thing) => (*other, *thing),
         }
     }
 
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     fn select_level(&mut self, level: usize) -> Level {
-        use Cell::{Box as B, Empty as E, Player as P, Target as T, Wall as W};
+        use Cell::{Box as B, Empty as E, LockedBox as L, Player as P, Target as T, Wall as W};
         match level {
-            0 => Grid(vec![
-                vec![W, W, W, W, W, W, W],
-                vec![W, E, E, E, E, E, W],
-                vec![W, E, P, T, B, E, W],
-                vec![W, E, E, E, E, E, W],
-                vec![W, W, W, W, W, W, W],
-            ])
-            .into(),
+            0 => {
+                let mut grid = Grid(vec![vec![P, T, B]]);
+                grid.wrap(E);
+                grid.wrap(W);
+                grid.into()
+            }
             1 => {
-                todo!()
+                let mut grid = Grid(vec![
+                    vec![E, E, W, W, W, W, W, E],
+                    vec![W, W, W, E, E, E, W, E],
+                    vec![W, T, P, B, E, E, W, E],
+                    vec![W, W, W, E, B, T, W, E],
+                    vec![W, T, W, W, B, E, W, E],
+                    vec![W, E, W, E, T, E, W, W],
+                    vec![W, B, E, L, B, B, T, W],
+                    vec![W, E, E, E, T, E, E, W],
+                    vec![W, W, W, W, W, W, W, W],
+                ]);
+                grid.into()
             }
             _ => {
                 unimplemented!()
@@ -197,30 +241,69 @@ impl Default for App {
 }
 
 impl From<Grid<Cell>> for Level {
-    fn from(value: Grid<Cell>) -> Self {
+    fn from(mut value: Grid<Cell>) -> Self {
+        value.wrap(Cell::Empty);
+        let Plural::One(player_location) = value.get(Cell::Player) else {
+            panic!()
+        };
         Level {
-            player_location: value.find_player(),
+            player_location,
+            remaining_boxes: value.count(Cell::Box),
             level_state: value,
             move_counter: 0,
         }
     }
 }
 
-impl Grid<Cell> {
+impl<T: Copy + PartialEq> Grid<T> {
     fn bounds(&self) -> (u16, u16) {
         (self.0.len() as u16, self.0[0].len() as u16)
     }
 
-    fn find_player(&self) -> Coord {
+    fn wrap(&mut self, with: T) {
+        let b = self.bounds();
+        let bar = vec![with; b.1 as usize + 2];
+        for mut i in &mut self.0 {
+            i.insert(0, with);
+            while i.len() < b.1 as usize + 2 {
+                i.push(with);
+            }
+        }
+        self.0.insert(0, bar.clone());
+        self.0.push(bar);
+    }
+
+    fn get(&self, getting: T) -> Plural<Coord> {
+        let mut out = vec![];
         for (i, val) in self.0.iter().enumerate() {
             for (j, who) in val.iter().enumerate() {
-                if let Cell::Player = who {
-                    return Coord(i as u16, j as u16);
+                if getting == *who {
+                    out.push(Coord(i as u16, j as u16));
                 }
             }
         }
-        Coord(0, 0)
+        if out.is_empty() {
+            Plural::None
+        } else if out.len() == 1 {
+            Plural::One(out[0])
+        } else {
+            Plural::Many(out)
+        }
     }
+
+    fn count(&self, getting: T) -> usize {
+        match self.get(getting) {
+            Plural::None => 0,
+            Plural::One(_) => 1,
+            Plural::Many(v) => v.len(),
+        }
+    }
+}
+
+enum Plural<T> {
+    None,
+    One(T),
+    Many(Vec<T>),
 }
 
 impl From<KeyEvent> for KeyBind {

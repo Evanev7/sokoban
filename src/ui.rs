@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::app::*;
 use crate::enums::*;
 use ratatui::{
@@ -69,14 +71,26 @@ impl App {
 }
 
 impl Cell {
-    fn to_span(&self) -> Span {
+    fn to_string(&self) -> &str {
         use Cell::*;
         match self {
             Player => "@@".into(),
+            PlayerOnTarget => "@<".into(),
             Box => "[]".into(),
             Empty => "  ".into(),
             Wall => "██".into(),
-            Target => "┥┝".into(),
+            Target => "><".into(),
+            LockedBox => "░░".into(),
         }
+    }
+
+    fn to_span(&self) -> Span {
+        self.to_string().into()
+    }
+}
+
+impl fmt::Debug for Cell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_string())
     }
 }

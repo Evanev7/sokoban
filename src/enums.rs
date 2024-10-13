@@ -24,11 +24,13 @@ pub enum MenuItem {
     Quit,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Cell {
     Empty,
     Player,
+    PlayerOnTarget,
     Box,
     Wall,
     Target,
+    LockedBox,
 }
