@@ -16,8 +16,8 @@ impl App {
             .border_type(BorderType::Rounded)
             .title(Title::from(Span::styled(
                 match &self.current_screen {
-                    Menu(_) => " Sokoban! ".to_owned(),
-                    Game(level) => format!(" Level{}:{} ", " 1 ", level.move_counter.to_string()),
+                    Menu(_) => "Sokoban!".to_owned(),
+                    Game(level) => format!("Level{}:{} ", " 1 ", level.move_counter.to_string()),
                 },
                 Style::default().fg(Color::Green),
             )))

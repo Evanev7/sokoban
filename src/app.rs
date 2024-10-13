@@ -126,6 +126,8 @@ impl App {
             return;
         };
 
+        assert!(level.level_state[level.player_location] == Player);
+
         use KeyBind::*;
         let dir = Offset(
             match direction {
@@ -150,6 +152,7 @@ impl App {
             (Empty, _) => {
                 level.level_state[level.player_location] = Empty;
                 level.level_state[next_pos] = Player;
+                level.player_location = next_pos;
             }
             (Box, Empty) => {
                 level.level_state[next_pos] = Empty;

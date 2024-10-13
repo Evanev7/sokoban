@@ -24,6 +24,7 @@ pub enum MenuItem {
     Quit,
 }
 
+#[derive(PartialEq, Eq)]
 pub enum Cell {
     Empty,
     Player,
