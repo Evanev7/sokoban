@@ -8,8 +8,9 @@ use std::{
     ops::{
         Add,
         ControlFlow::{self, Break, Continue},
-        Index, IndexMut, Mul, Neg, Sub,
+        Index, IndexMut, Mul, Neg, RemAssign, Sub,
     },
+    time::{Duration, Instant, SystemTime},
 };
 
 use crate::enums::*;
@@ -41,6 +42,8 @@ impl MenuItem {
 pub struct App {
     pub current_screen: CurrentScreen,
     pub next_level: usize,
+    pub timing_buffer: [Duration; 30],
+    pub timing_index: u8,
 }
 
 pub struct Level {
@@ -75,21 +78,37 @@ impl<T> IndexMut<Coord> for Grid<T> {
 
 impl App {
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
+        let target_fps = 60.0;
+        let mut now = Instant::now();
+        let mut delta = now.elapsed();
         loop {
             terminal.draw(|frame| self.draw(frame))?;
-            let Ok(Event::Key(key)) = event::read() else {
-                continue;
+            match event::poll(Duration::from_secs_f64(1f64 / target_fps).saturating_sub(delta)) {
+                Ok(true) => {
+                    let Ok(Event::Key(key)) = event::read() else {
+                        unreachable!()
+                    };
+                    match self.process_input(key) {
+                        Continue(()) => {}
+                        Break(b) => return Ok(()),
+                    };
+                }
+                _ => {}
             };
-            match self.process_input(key) {
-                Continue(()) => {}
-                Break(b) => return Ok(()),
-            };
-            self.update()
+
+            delta = now.elapsed();
+            now = Instant::now();
+
+            self.timing_buffer[self.timing_index as usize] = delta;
+            self.timing_index += 1;
+            self.timing_index %= 30;
+
+            self.update(delta);
         }
         Ok(())
     }
 
-    fn update(&mut self) {
+    fn update(&mut self, delta: Duration) {
         match &self.current_screen {
             CurrentScreen::Menu(_) => {}
             CurrentScreen::Game(level) => {
@@ -236,6 +255,8 @@ impl Default for App {
         Self {
             current_screen: CurrentScreen::Menu(MenuItem::Play),
             next_level: 0,
+            timing_buffer: [Duration::ZERO; 30],
+            timing_index: 0,
         }
     }
 }

@@ -1,4 +1,5 @@
 use std::fmt;
+use std::time::Duration;
 
 use crate::app::*;
 use crate::enums::*;
@@ -25,7 +26,16 @@ impl App {
             )))
             .padding(Padding::uniform(1))
             .title_alignment(Alignment::Left)
-            .title_bottom("do some keybinds bozo");
+            .title_bottom(format!(
+                "do some keybinds bozo {:#?}",
+                1.0 / self
+                    .timing_buffer
+                    .into_iter()
+                    .reduce(std::ops::Add::add)
+                    .unwrap()
+                    .div_f64(30.0)
+                    .as_secs_f64()
+            ));
 
         let focused_style = Style::default().add_modifier(Modifier::BOLD);
         let unfocused_style = Style::default();
