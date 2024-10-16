@@ -20,14 +20,19 @@ impl App {
             .title(Title::from(Span::styled(
                 match &self.current_screen {
                     Menu(_) => "Sokoban!".to_owned(),
-                    Game(level) => format!("Level{}:{} ", " 1 ", level.move_counter.to_string()),
+                    Game(level) => format!(
+                        "Level{}: {} Moves: {} Boxes Remaining ",
+                        " 1",
+                        level.move_counter.to_string(),
+                        level.remaining_boxes
+                    ),
                 },
                 Style::default().fg(Color::Green),
             )))
             .padding(Padding::uniform(1))
             .title_alignment(Alignment::Left)
             .title_bottom(format!(
-                "do some keybinds bozo {:#?}",
+                "FPS:{:.0}",
                 1.0 / self
                     .timing_buffer
                     .into_iter()
@@ -35,7 +40,8 @@ impl App {
                     .unwrap()
                     .div_f64(30.0)
                     .as_secs_f64()
-            ));
+            ))
+            .title_bottom("do some keybinds");
 
         let focused_style = Style::default().add_modifier(Modifier::BOLD);
         let unfocused_style = Style::default();
@@ -84,13 +90,32 @@ impl Cell {
     fn to_string(&self) -> &str {
         use Cell::*;
         match self {
-            Player => "@@".into(),
-            PlayerOnTarget => "@<".into(),
-            Box => "[]".into(),
-            Empty => "  ".into(),
-            Wall => "██".into(),
-            Target => "><".into(),
-            LockedBox => "░░".into(),
+            Player {
+                on_target: false,
+                hp,
+            } => "@@",
+            Player {
+                on_target: true,
+                hp,
+            } => "@<",
+            Box { locked: false } => "[]",
+            Empty => "  ",
+            Wall => "██",
+            Target => "><",
+            Box { locked: true } => "░░",
+            Turret {
+                direction,
+                cooldown: _,
+            } => match direction {
+                Direction::Up => "▟▙",
+                Direction::Left => "┫█",
+                Direction::Right => "█┣",
+                Direction::Down => "▜▛",
+            },
+            Bullet {
+                direction,
+                on_target,
+            } => "🞀🞂",
         }
     }
 

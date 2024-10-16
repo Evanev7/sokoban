@@ -1,6 +1,6 @@
 use strum::EnumIter;
 
-use crate::app::Level;
+use crate::app::{Coord, Level, Offset};
 
 pub enum KeyBind {
     Quit,
@@ -10,6 +10,28 @@ pub enum KeyBind {
     Right,
     Select,
     None,
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl From<KeyBind> for Direction {
+    fn from(value: KeyBind) -> Self {
+        use Direction as D;
+        use KeyBind::*;
+        match value {
+            Up => D::Up,
+            Down => D::Down,
+            Left => D::Left,
+            Right => D::Right,
+            _ => panic!("Shouldn't convert other keybind to direction."),
+        }
+    }
 }
 
 pub enum CurrentScreen {
@@ -27,10 +49,21 @@ pub enum MenuItem {
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Cell {
     Empty,
-    Player,
-    PlayerOnTarget,
-    Box,
+    Player {
+        on_target: bool,
+        hp: u8,
+    },
+    Turret {
+        direction: Direction,
+        cooldown: u8,
+    },
+    Bullet {
+        direction: Direction,
+        on_target: bool,
+    },
+    Box {
+        locked: bool,
+    },
     Wall,
     Target,
-    LockedBox,
 }

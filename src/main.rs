@@ -4,10 +4,11 @@ mod app;
 mod enums;
 mod ui;
 
+use std::io;
+
 use crate::app::App;
 
-fn main() -> color_eyre::Result<()> {
-    color_eyre::install()?;
+fn main() -> io::Result<()> {
     let mut terminal = ratatui::init();
     terminal.clear()?;
     let mut app = App::default();

@@ -4,7 +4,7 @@ use ratatui::{
 };
 use std::{
     borrow::BorrowMut,
-    fmt,
+    fmt, io,
     ops::{
         Add,
         ControlFlow::{self, Break, Continue},
@@ -59,34 +59,35 @@ pub struct Coord(u16, u16);
 #[derive(Clone, Copy)]
 pub struct Offset(i16, i16);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Grid<T>(pub Vec<Vec<T>>);
 
 impl<T> Index<Coord> for Grid<T> {
     type Output = T;
 
     fn index(&self, index: Coord) -> &Self::Output {
-        &self.0[index.0 as usize][index.1 as usize]
+        &self.0[index.1 as usize][index.0 as usize]
     }
 }
 
 impl<T> IndexMut<Coord> for Grid<T> {
     fn index_mut(&mut self, index: Coord) -> &mut Self::Output {
-        &mut self.0[index.0 as usize][index.1 as usize]
+        &mut self.0[index.1 as usize][index.0 as usize]
     }
 }
 
 impl App {
-    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
+    pub fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         let target_fps = 60.0;
         let mut now = Instant::now();
         let mut delta = now.elapsed();
+        let mut processed_time = delta;
         loop {
             terminal.draw(|frame| self.draw(frame))?;
             match event::poll(Duration::from_secs_f64(1f64 / target_fps).saturating_sub(delta)) {
                 Ok(true) => {
                     let Ok(Event::Key(key)) = event::read() else {
-                        unreachable!()
+                        continue;
                     };
                     match self.process_input(key) {
                         Continue(()) => {}
@@ -97,25 +98,89 @@ impl App {
             };
 
             delta = now.elapsed();
+            processed_time += delta;
             now = Instant::now();
 
             self.timing_buffer[self.timing_index as usize] = delta;
             self.timing_index += 1;
             self.timing_index %= 30;
 
-            self.update(delta);
+            if processed_time > Duration::from_millis(50) {
+                self.fixed_update();
+                processed_time -= Duration::from_millis(50);
+            }
+            self.update();
         }
         Ok(())
     }
 
-    fn update(&mut self, delta: Duration) {
-        match &self.current_screen {
-            CurrentScreen::Menu(_) => {}
-            CurrentScreen::Game(level) => {
-                if level.remaining_boxes == 0 {
-                    self.next_level()
+    fn fixed_update(&mut self) {
+        let CurrentScreen::Game(level) = self.current_screen.borrow_mut() else {
+            return;
+        };
+        let mut next_grid: Grid<Cell> = level.level_state.clone();
+        assert_eq!(next_grid.bounds(), level.level_state.bounds());
+        for (i, row) in level.level_state.0.iter().enumerate() {
+            for (j, cell) in row.iter().enumerate() {
+                let spot = Coord(j as u16, i as u16);
+                next_grid[spot] = match cell {
+                    &Cell::Turret {
+                        direction,
+                        cooldown,
+                    } if cooldown > 0 => Cell::Turret {
+                        direction,
+                        cooldown: cooldown - 1,
+                    },
+                    &Cell::Turret {
+                        direction,
+                        cooldown: 0,
+                    } => Cell::Turret {
+                        direction,
+                        cooldown: 2,
+                    },
+                    &Cell::Bullet {
+                        direction,
+                        on_target,
+                    } => {
+                        match &level.level_state[spot + direction.into()] {
+                            Cell::Empty => {
+                                next_grid[spot + direction.into()] = Cell::Bullet {
+                                    direction,
+                                    on_target: *cell == Cell::Target,
+                                };
+                            }
+                            Cell::Player { on_target, hp } => {
+                                next_grid[spot + direction.into()] = if *hp > 1 {
+                                    Cell::Player {
+                                        hp: hp - 1,
+                                        on_target: *on_target,
+                                    }
+                                } else {
+                                    Cell::Empty
+                                };
+                            }
+                            _ => {}
+                        }
+
+                        if on_target {
+                            Cell::Target
+                        } else {
+                            Cell::Empty
+                        }
+                    }
+                    &other => other,
                 }
             }
+        }
+        level.level_state = next_grid;
+    }
+
+    fn update(&mut self) {
+        let CurrentScreen::Game(level) = &mut self.current_screen else {
+            return;
+        };
+        if level.remaining_boxes == 0 {
+            self.next_level()
         }
     }
 
@@ -150,8 +215,9 @@ impl App {
                 Continue(())
             }
             Game(_) => {
-                match key.into() {
-                    Up | Down | Left | Right => self.move_player(key.into()),
+                let action = key.into();
+                match action {
+                    Up | Down | Left | Right => self.move_player(action.into()),
                     Quit => return Break(false),
                     _ => {}
                 }
@@ -160,71 +226,91 @@ impl App {
         }
     }
 
-    fn move_player(&mut self, direction: KeyBind) {
+    fn move_player(&mut self, direction: Direction) {
         let CurrentScreen::Game(level) = &mut self.current_screen else {
             return;
         };
 
-        assert!(
-            level.level_state[level.player_location] == Player
-                || level.level_state[level.player_location] == PlayerOnTarget
-        );
+        assert!(matches!(
+            level.level_state[level.player_location],
+            Cell::Player {
+                on_target: _,
+                hp: _
+            }
+        ));
 
-        use KeyBind::*;
-        let dir = Offset(
-            match direction {
-                Up => -1,
-                Down => 1,
-                _ => 0,
-            },
-            match direction {
-                Left => -1,
-                Right => 1,
-                _ => 0,
-            },
-        );
+        let dir: Offset = direction.into();
 
         let next_pos = level.player_location + dir;
         let next_next_pos = level.player_location + dir * 2;
 
-        let grid = level.level_state.borrow_mut();
+        let grid = &level.level_state;
+        let mut next_grid = level.level_state.clone();
 
         use Cell::*;
-        (grid[next_pos], grid[next_next_pos]) = match (&grid[next_pos], &grid[next_next_pos]) {
-            (Empty, _) => {
-                grid[level.player_location] = match grid[level.player_location] {
-                    Player => Empty,
-                    PlayerOnTarget => Target,
-                    _ => unreachable!(),
-                };
+        (
+            next_grid[level.player_location],
+            next_grid[next_pos],
+            next_grid[next_next_pos],
+        ) = match (
+            &grid[level.player_location],
+            &grid[next_pos],
+            &grid[next_next_pos],
+        ) {
+            (Player { on_target, hp }, Empty, _) => {
                 level.player_location = next_pos;
                 level.move_counter += 1;
-                (Player, grid[next_next_pos])
+                (
+                    if *on_target { Target } else { Empty },
+                    Player {
+                        on_target: false,
+                        hp: *hp,
+                    },
+                    grid[next_next_pos],
+                )
             }
-            (Target, _) => {
-                grid[level.player_location] = Empty;
+            (Player { on_target, hp }, Target, _) => {
                 level.player_location = next_pos;
                 level.move_counter += 1;
-                (PlayerOnTarget, grid[next_next_pos])
+                (
+                    if *on_target { Target } else { Empty },
+                    Player {
+                        on_target: true,
+                        hp: *hp,
+                    },
+                    grid[next_next_pos],
+                )
             }
-            (Box, Empty) => (Empty, Box),
-            (Box, Target) => {
+            (any, Box { locked: false }, Empty) => (*any, Empty, Box { locked: false }),
+            (any, Box { locked: false }, Target) => {
                 level.remaining_boxes -= 1;
-                (Empty, LockedBox)
+                (*any, Empty, Box { locked: true })
             }
-            (LockedBox, Empty) => {
+            (any, Box { locked: true }, Empty) => {
                 level.remaining_boxes += 1;
-                (Target, Box)
+                (*any, Target, Box { locked: false })
             }
-            (other, thing) => (*other, *thing),
-        }
+            (any, Box { locked: true }, Target) => {
+                level.remaining_boxes += 1;
+                (*any, Target, Box { locked: true })
+            }
+            (any, other, thing) => (*any, *other, *thing),
+        };
+
+        level.level_state = next_grid;
     }
 
     fn select_level(&mut self, level: usize) -> Level {
-        use Cell::{Box as B, Empty as E, LockedBox as L, Player as P, Target as T, Wall as W};
+        use Cell::{Empty as E, Target as T, Wall as W};
+        let b = Cell::Box { locked: false };
+        let l = Cell::Box { locked: true };
+        let p = Cell::Player {
+            on_target: false,
+            hp: 3,
+        };
         match level {
             0 => {
-                let mut grid = Grid(vec![vec![P, T, B]]);
+                let mut grid = Grid(vec![vec![p, T, b]]);
                 grid.wrap(E);
                 grid.wrap(W);
                 grid.into()
@@ -233,11 +319,11 @@ impl App {
                 let mut grid = Grid(vec![
                     vec![E, E, W, W, W, W, W, E],
                     vec![W, W, W, E, E, E, W, E],
-                    vec![W, T, P, B, E, E, W, E],
-                    vec![W, W, W, E, B, T, W, E],
-                    vec![W, T, W, W, B, E, W, E],
+                    vec![W, T, p, b, E, E, W, E],
+                    vec![W, W, W, E, b, T, W, E],
+                    vec![W, T, W, W, b, E, W, E],
                     vec![W, E, W, E, T, E, W, W],
-                    vec![W, B, E, L, B, B, T, W],
+                    vec![W, b, E, l, b, b, T, W],
                     vec![W, E, E, E, T, E, E, W],
                     vec![W, W, W, W, W, W, W, W],
                 ]);
@@ -264,15 +350,31 @@ impl Default for App {
 impl From<Grid<Cell>> for Level {
     fn from(mut value: Grid<Cell>) -> Self {
         value.wrap(Cell::Empty);
-        let Plural::One(player_location) = value.get(Cell::Player) else {
-            panic!()
+        let Some(player_location) = value.get_player() else {
+            unreachable!()
         };
         Level {
             player_location,
-            remaining_boxes: value.count(Cell::Box),
+            remaining_boxes: value.count(Cell::Box { locked: false }),
             level_state: value,
             move_counter: 0,
         }
+    }
+}
+
+impl Grid<Cell> {
+    fn get_player(&self) -> Option<Coord> {
+        for (i, val) in self.0.iter().enumerate() {
+            for (j, who) in val.iter().enumerate() {
+                match *who {
+                    Cell::Player { on_target, hp } => {
+                        return Some(Coord(i as u16, j as u16));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
     }
 }
 
@@ -298,7 +400,7 @@ impl<T: Copy + PartialEq> Grid<T> {
         let mut out = vec![];
         for (i, val) in self.0.iter().enumerate() {
             for (j, who) in val.iter().enumerate() {
-                if getting == *who {
+                if who == &getting {
                     out.push(Coord(i as u16, j as u16));
                 }
             }
@@ -391,5 +493,17 @@ impl Mul<i16> for Offset {
 
     fn mul(self, rhs: i16) -> Self::Output {
         Self(self.0.saturating_mul(rhs), self.1.saturating_mul(rhs))
+    }
+}
+
+impl From<Direction> for Offset {
+    fn from(value: Direction) -> Self {
+        use Direction::*;
+        match value {
+            Up => Self(0, -1),
+            Down => Self(0, 1),
+            Right => Self(1, 0),
+            Left => Self(-1, 0),
+        }
     }
 }
