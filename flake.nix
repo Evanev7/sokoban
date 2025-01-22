@@ -2,36 +2,25 @@
   description = "see3-rs Nix Dev Flake";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    rust-overlay = {
-      url = "github:oxalica/rust-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    nixpkgs.url = "github:NixOS/nixpkgs/release-24.11";
   };
 
-  outputs = { self, nixpkgs, rust-overlay, }: 
-  let
-    overlays = [ (import rust-overlay) ];
+  outputs = inputs: let
     system = "x86_64-linux";
-    pkgs = import nixpkgs {
-      inherit system overlays;
+    pkgs = import inputs.nixpkgs {
+      inherit system;
       config.allowUnfree = true;
     };
   in
-  with pkgs;
-  {
-    devShells.${system}.default = let
-      build-rust = rust-bin.stable.latest.default.override {
-            extensions = [
-              "rust-src"
-              "rust-analyzer"
-            ];
-        };
-    in mkShell {
-      buildInputs = [
-        build-rust
-        cargo
-      ];
+    with pkgs; {
+      devShells.${system}.default = mkShell {
+        buildInputs = [
+          rustc
+          rust-analyzer
+          clippy
+          bacon
+          cargo
+        ];
+      };
     };
-  };
 }
